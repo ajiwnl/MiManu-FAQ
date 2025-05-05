@@ -7,6 +7,7 @@ import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
 import time
 
+# Setup
 app = Flask(__name__)
 CORS(app)
 
@@ -14,47 +15,51 @@ openai.api_key = os.getenv("OPENAI_API_KEY")
 
 FALLBACK_RESPONSE = "I'm not sure, but I can assist you with MiManuTMS Frequently asked Questions (FAQ)."
 
-# ---------- Load and embed FAQ ----------
 faq_questions = []
 faq_answers = []
 faq_embeddings = []
 
-faq_jsonl_path = "dataset/faq.jsonl"
-embeddings_path = "dataset/faq_embeddings.npy"
-answers_path = "dataset/faq_answers.json"
+# Paths
+faq_jsonl_path = os.path.join(os.path.dirname(__file__), "../dataset/faq.jsonl")
+embeddings_path = os.path.join(os.path.dirname(__file__), "../dataset/faq_embeddings.npy")
+answers_path = os.path.join(os.path.dirname(__file__), "../dataset/faq_answers.json")
 
-# Load FAQ questions and answers
-with open(faq_jsonl_path, "r", encoding="utf-8") as f:
-    for line in f:
-        item = json.loads(line)
-        user_msg = next((msg["content"] for msg in item["messages"] if msg["role"] == "user"), None)
-        assistant_msg = next((msg["content"] for msg in item["messages"] if msg["role"] == "assistant"), None)
-        if user_msg and assistant_msg:
-            faq_questions.append(user_msg)
-            faq_answers.append(assistant_msg)
+# Load data
+def load_data():
+    global faq_questions, faq_answers, faq_embeddings
+    with open(faq_jsonl_path, "r", encoding="utf-8") as f:
+        for line in f:
+            item = json.loads(line)
+            user_msg = next((msg["content"] for msg in item["messages"] if msg["role"] == "user"), None)
+            assistant_msg = next((msg["content"] for msg in item["messages"] if msg["role"] == "assistant"), None)
+            if user_msg and assistant_msg:
+                faq_questions.append(user_msg)
+                faq_answers.append(assistant_msg)
 
-# Generate or reuse embeddings
-if os.path.exists(embeddings_path) and os.path.exists(answers_path):
-    faq_embeddings = np.load(embeddings_path)
-    with open(answers_path, "r", encoding="utf-8") as f:
-        faq_answers = json.load(f)
-else:
-    print("Generating FAQ embeddings...")
-    for question in faq_questions:
-        response = openai.Embedding.create(
-            model="text-embedding-3-small",
-            input=question
-        )
-        embedding = response["data"][0]["embedding"]
-        faq_embeddings.append(embedding)
-        time.sleep(0.2)  # Avoid rate limit
+    if os.path.exists(embeddings_path) and os.path.exists(answers_path):
+        faq_embeddings = np.load(embeddings_path)
+        with open(answers_path, "r", encoding="utf-8") as f:
+            faq_answers = json.load(f)
+    else:
+        for question in faq_questions:
+            response = openai.Embedding.create(
+                model="text-embedding-3-small",
+                input=question
+            )
+            embedding = response["data"][0]["embedding"]
+            faq_embeddings.append(embedding)
+            time.sleep(0.2)
 
-    faq_embeddings = np.array(faq_embeddings)
-    np.save(embeddings_path, faq_embeddings)
-    with open(answers_path, "w", encoding="utf-8") as f:
-        json.dump(faq_answers, f, ensure_ascii=False)
+        faq_embeddings_np = np.array(faq_embeddings)
+        np.save(embeddings_path, faq_embeddings_np)
+        with open(answers_path, "w", encoding="utf-8") as f:
+            json.dump(faq_answers, f, ensure_ascii=False)
 
-# ---------- Utility: Check if greeting ----------
+        faq_embeddings[:] = faq_embeddings_np
+
+load_data()
+
+
 def is_greeting_or_nonfaq(text):
     text = text.lower()
     keywords = [
@@ -66,9 +71,8 @@ def is_greeting_or_nonfaq(text):
     return any(keyword in text for keyword in keywords)
 
 
-# ---------- Flask Route ----------
-@app.route("/chat", methods=["POST"])
-def chat():
+@app.route("/api/chat", methods=["POST"])
+def handler():
     try:
         data = request.get_json()
         message = data.get("message", "").strip()
@@ -76,14 +80,12 @@ def chat():
         if not message:
             return jsonify({"error": "Message cannot be empty"}), 400
 
-        # Embed the user query
         embedding_response = openai.Embedding.create(
             model="text-embedding-3-small",
             input=message
         )
         user_embedding = np.array(embedding_response["data"][0]["embedding"]).reshape(1, -1)
 
-        # Compare with FAQ
         similarities = cosine_similarity(user_embedding, faq_embeddings).flatten()
         max_index = similarities.argmax()
         max_score = similarities[max_index]
@@ -107,6 +109,3 @@ def chat():
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
-if __name__ == "__main__":
-    app.run(debug=True, port=5001)

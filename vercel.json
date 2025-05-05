@@ -1,14 +1,14 @@
 {
-  "builds": [
-    {
-      "src": "main.py",
-      "use": "@vercel/python"
+  "functions": {
+    "api/chat.py": {
+      "runtime": "python3.9"
     }
-  ],
+  },
   "routes": [
     {
-      "src": "/(.*)",
-      "dest": "main.py"
+      "src": "/api/chat",
+      "methods": ["POST"],
+      "dest": "api/chat.py"
     }
   ]
 }
